@@ -1,0 +1,12 @@
+{
+  "name": "cantbelievetheview-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Backend de checkout de cantbelievetheview.com — Stripe (pago) + Prodigi (impresión y envío).",
+  "engines": {
+    "node": "20.x"
+  },
+  "dependencies": {
+    "stripe": "^17.4.0"
+  }
+}
