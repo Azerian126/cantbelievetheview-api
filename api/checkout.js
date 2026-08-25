@@ -97,6 +97,6 @@ module.exports = async (req, res) => {
     res.status(200).json({ url: session.url });
   } catch (err) {
     console.error('Error creando checkout session:', err);
-    res.status(500).json({ error: 'No se pudo iniciar el pago. Probá de nuevo en un rato.' });
+    res.status(500).json({ error: 'No se pudo iniciar el pago. Probá de nuevo en un rato.', debug: err.message });
   }
 };
