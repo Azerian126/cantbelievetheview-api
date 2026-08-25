@@ -7,6 +7,10 @@
     "node": "20.x"
   },
   "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@upstash/redis": "^1.38.2",
+    "cloudinary": "^2.10.1",
+    "satori": "^0.33.4",
     "stripe": "^17.4.0"
   }
 }

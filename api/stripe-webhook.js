@@ -1,6 +1,9 @@
 const stripe = require('../lib/stripe');
-const { prodigiSkuFor } = require('../lib/catalog');
+const { prodigiSkuFor, getSiteData, findPhotoMeta } = require('../lib/catalog');
 const { createOrder } = require('../lib/prodigi');
+const { renderPostcard } = require('../lib/postcard');
+const { nextEditionNumber } = require('../lib/editions');
+const { uploadBuffer } = require('../lib/cloudinary');
 
 // Necesitamos el body CRUDO (sin parsear) para poder verificar la firma de
 // Stripe — por eso se apaga el bodyParser automático de Vercel acá.
@@ -71,12 +74,27 @@ module.exports = async (req, res) => {
         continue;
       }
 
+      // La tarjeta del sobre (nombre + coordenadas + firma + N° de edición)
+      // es un extra — si falla generarla, igual mandamos el pedido de
+      // impresión sin ella en vez de bloquear un pedido ya cobrado.
+      let postcardUrl;
+      try {
+        const site = await getSiteData();
+        const { coordsText, place } = findPhotoMeta(site, item.photoUrl);
+        const editionNumber = await nextEditionNumber(item.photoUrl);
+        const png = await renderPostcard({ title: item.title, coordsText, place, editionNumber });
+        postcardUrl = await uploadBuffer(png, `${session.id}-${editionNumber}`);
+      } catch (err) {
+        console.error(`[ALERTA] No se pudo generar la tarjeta para la sesión ${session.id}:`, err.message);
+      }
+
       try {
         const order = await createOrder({
           merchantReference: `${session.id}-${item.photoUrl.slice(-12)}`,
           sku,
           materialId: item.materialId,
           imageUrl: item.photoUrl,
+          postcardUrl,
           recipient: { name: buyerName, email: buyerEmail, address },
         });
         console.log(`Pedido enviado a Prodigi: ${order.order?.id || '(sin id)'} — sesión ${session.id}`);
