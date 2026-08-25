@@ -52,12 +52,12 @@ module.exports = async (req, res) => {
         variantLabel = 'Digital';
       } else if (type === 'print') {
         const material = site.materials.find((m) => m.id === materialId);
-        const size = site.sizes.find((s) => s.id === sizeId);
+        const size = material && material.sizes.find((s) => s.id === sizeId);
         if (!material || !size) {
           return res.status(400).json({ error: `Material o tamaño inválido para "${title}".` });
         }
-        priceUsd = size.price + material.mod;
-        variantLabel = `Impresión ${size.id} · ${material.label}`;
+        priceUsd = size.price;
+        variantLabel = `Impresión ${size.label} · ${material.label}`;
         hasPrint = true;
       } else {
         return res.status(400).json({ error: `Tipo de item inválido: ${type}` });

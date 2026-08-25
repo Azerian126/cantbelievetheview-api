@@ -75,6 +75,7 @@ module.exports = async (req, res) => {
         const order = await createOrder({
           merchantReference: `${session.id}-${item.photoUrl.slice(-12)}`,
           sku,
+          materialId: item.materialId,
           imageUrl: item.photoUrl,
           recipient: { name: buyerName, email: buyerEmail, address },
         });
