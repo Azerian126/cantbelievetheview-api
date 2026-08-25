@@ -90,6 +90,11 @@ module.exports = async (req, res) => {
       metadata,
       customer_email: req.body.email || undefined,
       shipping_address_collection: hasPrint ? { allowed_countries: SHIPPING_COUNTRIES } : undefined,
+      // Managed Payments viene activado por default en la cuenta y exige un
+      // tax_code por producto precreado — no aplica a nuestro catálogo
+      // dinámico (precio calculado al vuelo, sin productos precreados en
+      // Stripe), así que lo apagamos explícitamente en cada sesión.
+      managed_payments: { enabled: false },
       success_url: 'https://cantbelievetheview.com/?checkout=success&session_id={CHECKOUT_SESSION_ID}',
       cancel_url: 'https://cantbelievetheview.com/?checkout=cancelled',
     });
@@ -97,6 +102,6 @@ module.exports = async (req, res) => {
     res.status(200).json({ url: session.url });
   } catch (err) {
     console.error('Error creando checkout session:', err);
-    res.status(500).json({ error: 'No se pudo iniciar el pago. Probá de nuevo en un rato.', debug: err.message });
+    res.status(500).json({ error: 'No se pudo iniciar el pago. Probá de nuevo en un rato.' });
   }
 };
