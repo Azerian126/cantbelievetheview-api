@@ -4,6 +4,7 @@ const { createOrder } = require('../lib/prodigi');
 const { renderPostcard } = require('../lib/postcard');
 const { nextEditionNumber } = require('../lib/editions');
 const { uploadBuffer } = require('../lib/cloudinary');
+const { sendOrderConfirmation } = require('../lib/email');
 
 // Necesitamos el body CRUDO (sin parsear) para poder verificar la firma de
 // Stripe — por eso se apaga el bodyParser automático de Vercel acá.
@@ -31,6 +32,81 @@ function mapAddress(shipping) {
   };
 }
 
+async function handleCheckoutCompleted(session) {
+  const count = parseInt(session.metadata?.item_count || '0', 10);
+  const items = [];
+  for (let i = 0; i < count; i++) {
+    const raw = session.metadata[`item_${i}`];
+    if (raw) items.push(JSON.parse(raw));
+  }
+
+  // Desde la API version 2025+ de Stripe, la dirección de envío recolectada
+  // en Checkout vive en collected_information.shipping_details — versiones
+  // más viejas la tenían directo en session.shipping_details. Probamos las
+  // dos para no depender de cuál te toque.
+  const shippingDetails = session.collected_information?.shipping_details || session.shipping_details;
+  const address = mapAddress(shippingDetails);
+  const buyerName = shippingDetails?.name || session.customer_details?.name || 'Cliente';
+  const buyerEmail = session.customer_details?.email;
+
+  for (const item of items) {
+    if (item.type !== 'print') continue; // digital no necesita imprenta
+
+    const sku = prodigiSkuFor(item.materialId, item.sizeId);
+    if (!sku) {
+      console.error(
+        `[ALERTA] Pedido ${session.id}: falta el SKU de Prodigi para ${item.materialId}/${item.sizeId} — ` +
+          `este item NO se mandó a imprimir. Revisá lib/catalog.js y procesalo a mano por ahora.`
+      );
+      continue;
+    }
+    if (!address) {
+      console.error(`[ALERTA] Pedido ${session.id}: item de impresión sin dirección de envío.`);
+      continue;
+    }
+
+    // La tarjeta del sobre (nombre + coordenadas + firma + N° de edición) es
+    // un extra — si falla generarla, igual mandamos el pedido de impresión
+    // sin ella en vez de bloquear un pedido ya cobrado.
+    let postcardUrl;
+    try {
+      const site = await getSiteData();
+      const { coordsText, place } = findPhotoMeta(site, item.photoUrl);
+      const editionNumber = await nextEditionNumber(item.photoUrl);
+      const png = await renderPostcard({ title: item.title, coordsText, place, editionNumber });
+      postcardUrl = await uploadBuffer(png, `${session.id}-${editionNumber}`);
+    } catch (err) {
+      console.error(`[ALERTA] No se pudo generar la tarjeta para la sesión ${session.id}:`, err.message);
+    }
+
+    try {
+      const order = await createOrder({
+        merchantReference: `${session.id}-${item.photoUrl.slice(-12)}`,
+        sku,
+        materialId: item.materialId,
+        imageUrl: item.photoUrl,
+        postcardUrl,
+        recipient: { name: buyerName, email: buyerEmail, address },
+      });
+      console.log(`Pedido enviado a Prodigi: ${order.order?.id || '(sin id)'} — sesión ${session.id}`);
+    } catch (err) {
+      console.error(`[ALERTA] Falló el pedido a Prodigi para la sesión ${session.id}:`, err.message);
+      // No relanzamos: si un item falla, no queremos que Stripe reintente
+      // el webhook entero (ya se cobró). Queda logueado para procesar a mano.
+    }
+  }
+
+  try {
+    await sendOrderConfirmation({
+      to: buyerEmail,
+      items,
+      total: `${(session.amount_total / 100).toFixed(2)} ${(session.currency || 'usd').toUpperCase()}`,
+    });
+  } catch (err) {
+    console.error(`[ALERTA] No se pudo mandar el email de confirmación para la sesión ${session.id}:`, err.message);
+  }
+}
+
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).end();
 
@@ -45,65 +121,17 @@ module.exports = async (req, res) => {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-    const count = parseInt(session.metadata?.item_count || '0', 10);
-    const items = [];
-    for (let i = 0; i < count; i++) {
-      const raw = session.metadata[`item_${i}`];
-      if (raw) items.push(JSON.parse(raw));
+  // El pago ya se cobró en cuanto Stripe nos llama acá — pase lo que pase
+  // adentro (un bug nuestro, Prodigi caído, etc.) siempre respondemos 200,
+  // nunca 500. Un 500 hace que Stripe reintente el mismo evento una y otra
+  // vez sin que eso arregle nada, y además nos tapa la causa real del error
+  // (Stripe solo nos mostraba "A server error has occurred", sin detalle).
+  try {
+    if (event.type === 'checkout.session.completed') {
+      await handleCheckoutCompleted(event.data.object);
     }
-
-    const address = mapAddress(session.shipping_details);
-    const buyerName = session.shipping_details?.name || session.customer_details?.name || 'Cliente';
-    const buyerEmail = session.customer_details?.email;
-
-    for (const item of items) {
-      if (item.type !== 'print') continue; // digital no necesita imprenta
-
-      const sku = prodigiSkuFor(item.materialId, item.sizeId);
-      if (!sku) {
-        console.error(
-          `[ALERTA] Pedido ${session.id}: falta el SKU de Prodigi para ${item.materialId}/${item.sizeId} — ` +
-            `este item NO se mandó a imprimir. Completá PRODIGI_SKU_MAP en lib/catalog.js y procesalo a mano por ahora.`
-        );
-        continue;
-      }
-      if (!address) {
-        console.error(`[ALERTA] Pedido ${session.id}: item de impresión sin dirección de envío.`);
-        continue;
-      }
-
-      // La tarjeta del sobre (nombre + coordenadas + firma + N° de edición)
-      // es un extra — si falla generarla, igual mandamos el pedido de
-      // impresión sin ella en vez de bloquear un pedido ya cobrado.
-      let postcardUrl;
-      try {
-        const site = await getSiteData();
-        const { coordsText, place } = findPhotoMeta(site, item.photoUrl);
-        const editionNumber = await nextEditionNumber(item.photoUrl);
-        const png = await renderPostcard({ title: item.title, coordsText, place, editionNumber });
-        postcardUrl = await uploadBuffer(png, `${session.id}-${editionNumber}`);
-      } catch (err) {
-        console.error(`[ALERTA] No se pudo generar la tarjeta para la sesión ${session.id}:`, err.message);
-      }
-
-      try {
-        const order = await createOrder({
-          merchantReference: `${session.id}-${item.photoUrl.slice(-12)}`,
-          sku,
-          materialId: item.materialId,
-          imageUrl: item.photoUrl,
-          postcardUrl,
-          recipient: { name: buyerName, email: buyerEmail, address },
-        });
-        console.log(`Pedido enviado a Prodigi: ${order.order?.id || '(sin id)'} — sesión ${session.id}`);
-      } catch (err) {
-        console.error(`[ALERTA] Falló el pedido a Prodigi para la sesión ${session.id}:`, err.message);
-        // No relanzamos: si un item falla, no queremos que Stripe reintente
-        // el webhook entero (ya se cobró). Queda logueado para procesar a mano.
-      }
-    }
+  } catch (err) {
+    console.error(`[ALERTA] Error inesperado procesando el webhook (evento ${event.id}):`, err);
   }
 
   res.status(200).json({ received: true });
