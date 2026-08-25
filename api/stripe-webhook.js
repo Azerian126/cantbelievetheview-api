@@ -1,10 +1,11 @@
 const stripe = require('../lib/stripe');
-const { prodigiSkuFor, getSiteData, findPhotoMeta } = require('../lib/catalog');
+const { prodigiSkuFor, getSiteData, findPhotoById } = require('../lib/catalog');
 const { createOrder } = require('../lib/prodigi');
 const { renderPostcard } = require('../lib/postcard');
 const { nextEditionNumber } = require('../lib/editions');
 const { uploadBuffer } = require('../lib/cloudinary');
 const { sendOrderConfirmation } = require('../lib/email');
+const { getCleanPhotoUrl } = require('../lib/photoStore');
 
 // Necesitamos el body CRUDO (sin parsear) para poder verificar la firma de
 // Stripe — por eso se apaga el bodyParser automático de Vercel acá.
@@ -40,6 +41,21 @@ async function handleCheckoutCompleted(session) {
     if (raw) items.push(JSON.parse(raw));
   }
 
+  // La metadata de Stripe solo tiene el id de cada foto (nunca la URL —
+  // data.json es público, así que la URL limpia vive aparte, en Redis).
+  // Recién acá, después de confirmar el pago, la resolvemos y la colgamos
+  // en item.photoUrl — de ahí para abajo (impresión, email) el resto del
+  // código sigue trabajando con una URL como siempre.
+  for (const item of items) {
+    item.photoUrl = await getCleanPhotoUrl(item.photoId);
+    if (!item.photoUrl) {
+      console.error(
+        `[ALERTA] Pedido ${session.id}: no encontré la URL limpia para la foto "${item.photoId}" en Redis — ` +
+          `¿es una foto vieja subida antes de este cambio? Revisar a mano.`
+      );
+    }
+  }
+
   // Desde la API version 2025+ de Stripe, la dirección de envío recolectada
   // en Checkout vive en collected_information.shipping_details — versiones
   // más viejas la tenían directo en session.shipping_details. Probamos las
@@ -51,6 +67,7 @@ async function handleCheckoutCompleted(session) {
 
   for (const item of items) {
     if (item.type !== 'print') continue; // digital no necesita imprenta
+    if (!item.photoUrl) continue; // ya logueado arriba, no hay archivo para mandar a imprimir
 
     const sku = prodigiSkuFor(item.materialId, item.sizeId);
     if (!sku) {
@@ -71,9 +88,14 @@ async function handleCheckoutCompleted(session) {
     let postcardUrl;
     try {
       const site = await getSiteData();
-      const { coordsText, place } = findPhotoMeta(site, item.photoUrl);
-      const editionNumber = await nextEditionNumber(item.photoUrl);
-      const png = await renderPostcard({ title: item.title, coordsText, place, editionNumber });
+      const photoMeta = findPhotoById(site, item.photoId);
+      const editionNumber = await nextEditionNumber(item.photoId);
+      const png = await renderPostcard({
+        title: item.title,
+        coordsText: photoMeta?.coordsText || '',
+        place: photoMeta?.place || '',
+        editionNumber,
+      });
       postcardUrl = await uploadBuffer(png, `${session.id}-${editionNumber}`);
     } catch (err) {
       // err.message venía "undefined" en algunos casos (p.ej. errores del SDK
@@ -84,7 +106,7 @@ async function handleCheckoutCompleted(session) {
 
     try {
       const order = await createOrder({
-        merchantReference: `${session.id}-${item.photoUrl.slice(-12)}`,
+        merchantReference: `${session.id}-${item.photoId}`,
         sku,
         materialId: item.materialId,
         imageUrl: item.photoUrl,

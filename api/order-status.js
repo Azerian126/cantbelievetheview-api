@@ -1,5 +1,6 @@
 const stripe = require('../lib/stripe');
 const { handleCors } = require('../lib/cors');
+const { getCleanPhotoUrl } = require('../lib/photoStore');
 
 // Lo llama la página de éxito (cantbelievetheview.com/?checkout=success&session_id=...)
 // para mostrar los links de descarga de lo digital y confirmar qué se compró,
@@ -24,15 +25,22 @@ module.exports = async (req, res) => {
       if (raw) items.push(JSON.parse(raw));
     }
 
-    res.status(200).json({
-      paid: true,
-      email: session.customer_details?.email || null,
-      items: items.map((it) => ({
+    // La URL limpia (sin marca de agua) recién se resuelve acá — después de
+    // confirmar que el pago está "paid" arriba — y solo para los items
+    // digitales, que son los únicos que se entregan como descarga directa.
+    const itemsWithDownload = await Promise.all(
+      items.map(async (it) => ({
         title: it.title,
         group: it.group,
         type: it.type,
-        downloadUrl: it.type === 'digital' ? it.photoUrl : null,
-      })),
+        downloadUrl: it.type === 'digital' ? await getCleanPhotoUrl(it.photoId) : null,
+      }))
+    );
+
+    res.status(200).json({
+      paid: true,
+      email: session.customer_details?.email || null,
+      items: itemsWithDownload,
     });
   } catch (err) {
     console.error('Error consultando order-status:', err);

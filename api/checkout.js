@@ -1,6 +1,6 @@
 const stripe = require('../lib/stripe');
 const { handleCors } = require('../lib/cors');
-const { getSiteData } = require('../lib/catalog');
+const { getSiteData, findPhotoById } = require('../lib/catalog');
 
 // Lista amplia de países a los que Stripe puede pedir dirección de envío.
 // Editable — sacá los que no quieras enviar, o agregá los que falten
@@ -28,11 +28,13 @@ module.exports = async (req, res) => {
 
     const site = await getSiteData();
 
-    // Todas las fotos reales que existen en el sitio (países + categorías),
-    // para poder validar que lo que llega del carrito es legítimo.
-    const allPhotoUrls = new Set();
+    // Todos los ids de fotos reales que existen en el sitio (países +
+    // categorías), para poder validar que lo que llega del carrito es
+    // legítimo. Ya no validamos por URL — desde que separamos la URL limpia
+    // de data.json, el carrito solo conoce el id de cada foto.
+    const allPhotoIds = new Set();
     [...site.visited, ...site.categories].forEach((entry) => {
-      (entry.photos || []).forEach((p) => allPhotoUrls.add(typeof p === 'string' ? p : p.url));
+      (entry.photos || []).forEach((p) => p && p.id && allPhotoIds.add(p.id));
     });
 
     let hasPrint = false;
@@ -40,11 +42,12 @@ module.exports = async (req, res) => {
     const metaItems = [];
 
     for (const raw of items) {
-      const { type, title, group, photoUrl, materialId, sizeId } = raw || {};
+      const { type, title, group, photoId, materialId, sizeId } = raw || {};
 
-      if (!photoUrl || !allPhotoUrls.has(photoUrl)) {
-        return res.status(400).json({ error: `Foto no reconocida: ${title || photoUrl}` });
+      if (!photoId || !allPhotoIds.has(photoId)) {
+        return res.status(400).json({ error: `Foto no reconocida: ${title || photoId}` });
       }
+      const photo = findPhotoById(site, photoId);
 
       let priceUsd, variantLabel;
       if (type === 'digital') {
@@ -70,13 +73,16 @@ module.exports = async (req, res) => {
           product_data: {
             name: `${title} — ${group || ''}`.trim(),
             description: variantLabel,
-            images: [photoUrl],
+            // displayUrl (con marca de agua) — esta sí es pública, es solo
+            // la miniatura que ve el cliente en la pantalla de pago de
+            // Stripe. La URL limpia nunca llega hasta acá.
+            images: photo.displayUrl ? [photo.displayUrl] : [],
           },
         },
         quantity: 1,
       });
 
-      metaItems.push({ type, title, group, photoUrl, materialId: materialId || null, sizeId: sizeId || null });
+      metaItems.push({ type, title, group, photoId, materialId: materialId || null, sizeId: sizeId || null });
     }
 
     const metadata = { item_count: String(metaItems.length) };
