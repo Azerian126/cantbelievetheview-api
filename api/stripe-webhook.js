@@ -76,7 +76,10 @@ async function handleCheckoutCompleted(session) {
       const png = await renderPostcard({ title: item.title, coordsText, place, editionNumber });
       postcardUrl = await uploadBuffer(png, `${session.id}-${editionNumber}`);
     } catch (err) {
-      console.error(`[ALERTA] No se pudo generar la tarjeta para la sesión ${session.id}:`, err.message);
+      // err.message venía "undefined" en algunos casos (p.ej. errores del SDK
+      // de Cloudinary, que no siempre son instancias de Error) — logueamos el
+      // objeto completo para no seguir adivinando a ciegas.
+      console.error(`[ALERTA] No se pudo generar la tarjeta para la sesión ${session.id}:`, err?.message || err, err?.error || '');
     }
 
     try {
