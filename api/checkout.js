@@ -42,7 +42,7 @@ module.exports = async (req, res) => {
     const metaItems = [];
 
     for (const raw of items) {
-      const { type, title, group, photoId, materialId, sizeId } = raw || {};
+      const { type, title, group, photoId, materialId, sizeId, gift } = raw || {};
 
       if (!photoId || !allPhotoIds.has(photoId)) {
         return res.status(400).json({ error: `Foto no reconocida: ${title || photoId}` });
@@ -82,7 +82,27 @@ module.exports = async (req, res) => {
         quantity: 1,
       });
 
-      metaItems.push({ type, title, group, photoId, materialId: materialId || null, sizeId: sizeId || null });
+      // El regalo solo aplica a impresiones (la digital no lleva carta
+      // adentro de ningún sobre) — se recorta la longitud porque todo esto
+      // vive en la metadata de Stripe, con límite de 500 caracteres por
+      // item, y porque termina impreso en una tarjeta A6 real.
+      let sanitizedGift = null;
+      if (type === 'print' && gift && typeof gift === 'object') {
+        const giftTo = String(gift.to || '').slice(0, 40).trim();
+        const giftFrom = String(gift.from || '').slice(0, 40).trim();
+        const giftNote = String(gift.note || '').slice(0, 160).trim();
+        if (giftTo || giftFrom || giftNote) sanitizedGift = { to: giftTo, from: giftFrom, note: giftNote };
+      }
+
+      metaItems.push({
+        type,
+        title,
+        group,
+        photoId,
+        materialId: materialId || null,
+        sizeId: sizeId || null,
+        gift: sanitizedGift,
+      });
     }
 
     const metadata = { item_count: String(metaItems.length) };

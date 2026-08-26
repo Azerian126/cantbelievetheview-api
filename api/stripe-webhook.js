@@ -95,6 +95,7 @@ async function handleCheckoutCompleted(session) {
         coordsText: photoMeta?.coordsText || '',
         place: photoMeta?.place || '',
         editionNumber,
+        gift: item.gift || undefined,
       });
       postcardUrl = await uploadBuffer(png, `${session.id}-${editionNumber}`);
     } catch (err) {
