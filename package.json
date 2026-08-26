@@ -4,7 +4,7 @@
   "private": true,
   "description": "Backend de checkout de cantbelievetheview.com — Stripe (pago) + Prodigi (impresión y envío).",
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "dependencies": {
     "@resvg/resvg-wasm": "^2.6.2",
