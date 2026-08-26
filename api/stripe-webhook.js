@@ -5,7 +5,7 @@ const { renderPostcard } = require('../lib/postcard');
 const { nextEditionNumber } = require('../lib/editions');
 const { uploadBuffer } = require('../lib/cloudinary');
 const { sendOrderConfirmation } = require('../lib/email');
-const { getCleanPhotoUrl } = require('../lib/photoStore');
+const { getCleanPhotoUrl, getPrintUrl } = require('../lib/photoStore');
 
 // Necesitamos el body CRUDO (sin parsear) para poder verificar la firma de
 // Stripe — por eso se apaga el bodyParser automático de Vercel acá.
@@ -110,12 +110,20 @@ async function handleCheckoutCompleted(session) {
       console.error(`[ALERTA] No se pudo generar la tarjeta para la sesión ${session.id}:`, err?.message || err, err?.error || '');
     }
 
+    // La derivada preparada para ESTE material (saturación comprimida y
+    // rango tonal reencajado al límite real del papel/aluminio — ver
+    // cantbelievetheview-bot/lib/printPrep.js) es la que de verdad hay que
+    // mandar a imprimir. Si no existe (foto vieja, o falló al subir), cae a
+    // la foto limpia tal cual — nunca bloquear una venta ya cobrada por
+    // esto, aunque el resultado impreso no sea el ideal.
+    const printUrl = (await getPrintUrl(item.photoId, item.materialId)) || item.photoUrl;
+
     try {
       const order = await createOrder({
         merchantReference: `${session.id}-${item.photoId}`,
         sku,
         materialId: item.materialId,
-        imageUrl: item.photoUrl,
+        imageUrl: printUrl,
         postcardUrl,
         recipient: { name: buyerName, email: buyerEmail, address },
       });
