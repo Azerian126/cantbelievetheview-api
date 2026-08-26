@@ -98,6 +98,11 @@ async function handleCheckoutCompleted(session) {
         gift: item.gift || undefined,
       });
       postcardUrl = await uploadBuffer(png, `${session.id}-${editionNumber}`);
+      // Se cuelga en el item (no solo la variable local postcardUrl) para
+      // que sendOrderConfirmation() más abajo la pueda adjuntar al email —
+      // antes se generaba y se usaba SOLO para el pedido a Prodigi, nunca
+      // llegaba al cliente ninguna vista previa de cómo queda la tarjeta.
+      item.postcardPng = png;
     } catch (err) {
       // err.message venía "undefined" en algunos casos (p.ej. errores del SDK
       // de Cloudinary, que no siempre son instancias de Error) — logueamos el
